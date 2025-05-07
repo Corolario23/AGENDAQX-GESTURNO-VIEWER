@@ -3,9 +3,30 @@ from datetime import datetime, timedelta, date
 import sqlite3
 from flask_sqlalchemy import SQLAlchemy
 import os
+from dotenv import load_dotenv
+import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Cargar variables de entorno
+load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+
+# Configurar la URL de la base de datos
+database_url = os.environ.get('DATABASE_URL')
+if not database_url:
+    logger.error("No se encontró la variable de entorno DATABASE_URL")
+    raise ValueError("DATABASE_URL no está configurada")
+
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+logger.info(f"Conectando a la base de datos: {database_url}")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -96,21 +117,25 @@ COLORES_TURNOS = {
 }
 
 def generar_calendario_año(año):
-    calendario = {}
-    for mes in range(1, 13):
-        for dia in range(1, 32):
-            try:
-                fecha = datetime(año, mes, dia).date()
-                turno_db = CirujanosTurno.query.filter_by(fecha=fecha).first()
-                if turno_db:
-                    calendario[fecha] = {
-                        'nombre': turno_db.nombre_turno,
-                        'color': COLORES_TURNOS[turno_db.nombre_turno],
-                        'cirujanos': [turno_db.cirujano1, turno_db.cirujano2]
-                    }
-            except ValueError:
-                continue
-    return calendario
+    try:
+        calendario = {}
+        for mes in range(1, 13):
+            for dia in range(1, 32):
+                try:
+                    fecha = datetime(año, mes, dia).date()
+                    turno_db = CirujanosTurno.query.filter_by(fecha=fecha).first()
+                    if turno_db:
+                        calendario[fecha] = {
+                            'nombre': turno_db.nombre_turno,
+                            'color': COLORES_TURNOS[turno_db.nombre_turno],
+                            'cirujanos': [turno_db.cirujano1, turno_db.cirujano2]
+                        }
+                except ValueError:
+                    continue
+        return calendario
+    except Exception as e:
+        logger.error(f"Error al generar calendario: {str(e)}")
+        return {}
 
 DIAS_POR_MES = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 NOMBRES_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
@@ -201,17 +226,49 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def show_calendar():
-    calendarios = {
-        2025: generar_calendario_año(2025),
-        2026: generar_calendario_año(2026)
-    }
-    return render_template_string(
-        HTML_TEMPLATE,
-        datetime=datetime,
-        calendarios=calendarios,
-        dias_por_mes=DIAS_POR_MES,
-        nombres_meses=NOMBRES_MESES
-    )
+    try:
+        calendarios = {
+            2025: generar_calendario_año(2025),
+            2026: generar_calendario_año(2026)
+        }
+        return render_template_string(
+            HTML_TEMPLATE,
+            datetime=datetime,
+            calendarios=calendarios,
+            dias_por_mes=DIAS_POR_MES,
+            nombres_meses=NOMBRES_MESES
+        )
+    except Exception as e:
+        logger.error(f"Error al mostrar el calendario: {str(e)}")
+        return """
+        <html>
+            <head>
+                <title>Error - AgendaQX</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                    h1 { color: #4EBFBF; }
+                    .error { color: #666; margin: 20px 0; }
+                </style>
+            </head>
+            <body>
+                <h1>AgendaQX</h1>
+                <div class="error">
+                    Lo sentimos, ha ocurrido un error al cargar el calendario.<br>
+                    Por favor, intente nuevamente más tarde.
+                </div>
+            </body>
+        </html>
+        """
+
+# Verificar la conexión a la base de datos al iniciar
+@app.before_first_request
+def check_database_connection():
+    try:
+        db.session.execute('SELECT 1')
+        logger.info("Conexión a la base de datos establecida correctamente")
+    except Exception as e:
+        logger.error(f"Error al conectar con la base de datos: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     app.run(debug=True, port=8082) 
